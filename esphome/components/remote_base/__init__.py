@@ -1253,3 +1253,46 @@ def midea_dumper(var, config):
 )
 async def midea_action(var, config, args):
     cg.add(var.set_code(config[CONF_CODE]))
+
+# A-OK Protocol (Window Shades)
+AOKData, AOKBinarySensor, AOKTrigger, AOKAction, AOKDumper = declare_protocol(
+    "AOK"
+)
+AOK_SCHEMA = cv.Schema(
+    {
+        cv.Required(CONF_DEVICE): cv.hex_uint32_t,
+        cv.Required(CONF_ADDRESS): cv.hex_uint16_t,
+        cv.Required(CONF_COMMAND): cv.hex_uint8_t,
+    }
+)
+
+@register_binary_sensor("aok", AOKBinarySensor, AOK_SCHEMA)
+def aok_binary_sensor(var, config):
+    cg.add(
+        var.set_data(
+            cg.StructInitializer(
+                AOKData,
+                ("device", config[CONF_DEVICE]),
+                ("address", config[CONF_ADDRESS]),
+                ("command", config[CONF_COMMAND]),
+            )
+        )
+    )
+
+@register_trigger("aok", AOKTrigger, AOKData)
+def aok_trigger(var, config):
+    pass
+
+
+@register_dumper("aok", AOKDumper)
+def aok_dumper(var, config):
+    pass
+
+
+@register_action("aok", AOKAction, AOK_SCHEMA)
+def aok_action(var, config, args):
+    cg.add(var.set_device((yield cg.templatable(config[CONF_DEVICE], args, cg.uint32))))
+    cg.add(var.set_address((yield cg.templatable(config[CONF_ADDRESS], args, cg.uint16))))
+    cg.add(var.set_command((yield cg.templatable(config[CONF_COMMAND], args, cg.uint8))))
+
+
