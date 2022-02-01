@@ -6,50 +6,52 @@ namespace remote_base {
 
 static const char *const TAG = "remote.aok";
 /* 
- * This plugin takes care of sending and receiving the A-OK protocl used for Window Shades
+ * This plugin takes care of sending and receiving (in progress) the A-OK protocl used for 
+ * Window Shades. This has been tested on AM25 433MHz shades from Zemismart.
  * 
- * Author  (present)  : Patrick Toal (aka Sage905)
+ * Author  (present)  : Patrick Toal (Sage905)
  * 
  * https://www.a-okmotors.com/en/
  * 
  * This is an implementation of the A-OK protocol. 
  * Thanks to Jason von Nieda and Akirjavainen for their work in decoding the protocol and
- * providing many of the details below 
+ * providing many of the details below.  I have refined the data based on my observations.
  *
  * Ref: https://github.com/akirjavainen/A-OK
  *
  * PROTOCOL DESCRIPTION
  * 
- * UP and DOWN buttons send two different commands for some reason, listed below
- * as AOK_UP/DOWN_EXAMPLE and AOK_AFTER_UP_DOWN_EXAMPLE. However, the latter command
- * would not seem to be required at all.
+ * The pulse multiplier (p) is 300us.
  * 
- * Tri-state bits are used.
+ * The data packets are combinations of H/L pulses.  
  * 
- * AGC:
- * Some remotes start the first command with a preamble of 8 times: HIGH of approx. 340 us + LOW of approx. 520 us
- * But most remotes do not transmit that preamble.
- * Every remote starts the command with an AGC HIGH of approx. 5200 us.
- * Then go LOW for approx. 530 us and start the commands bits.
+ * The table below describes the various items sent (in pulse multiples and usecs):
+ * 
+ *             |  H  |  L  |   H   |   L   |
+ * ============+=====+=====+=======+=======+
+ * SYNC        | 17p | 1p  | 5100us| 300us |
+ * DATA ONE    | 2p  | 1p  | 600us | 300us |
+ * DATA ZERO   | 1p  | 2p  | 300us | 600us |
+ * EOM         | 2p  | 17p | 600us | 5100us|
+ * 
+ * The format of a complete packet is:
+ * <Preamble> [<Sync><Message 1><EOM>]x6 [<Sync><Message 2><EOM>]x6(optional)
  *
- * RADIO SILENCE:
- * Some remotes instantly repeat the commands, some transmit a radio silence of approx. 5030 us at the end
- * of each command.
+ * The Preamble is sent by some remotes, but not all.  When sent, it is 8 x DATA ZERO.  
+ * I suspect this is to "wake up" receivers.  
+ *  
+ * Message = 64-bit command message (see below). All messages are sent 6 times in a row.  
  * 
- * Pulse length:
- * SHORT = 300 us 
- * LONG = 600 us
+ * NOTE: The EOM could be interepreted in multiple ways.  Either as a 65th bit to the message, 
+ * plus a silence, or as I have interpreted it, as a High of 2p, followed by a LOW of 17p. This
+ * keeps the message itself to 64-bits, which seems more likely.
+ * 
+ * MESSAGE FORMAT
  *
- * Data bits:
- * Data 0 = short HIGH, long LOW (wire 100)
- * Data 1 = long HIGH, short LOW (wire 110)
- * 
- * This code transmits a radio silence of 5100us after each command, although not all remotes do.
- *
- * Jason von Nieda reverse engineered the protocol, including the checksum. 
- * This is from his post from Github:
- * 
- * 64 bits of data, with a trailing 1 making it 65 bits transmitted. The packet format is:
+ * Jason von Nieda reverse engineered the protocol, including the checksum. I have ammended it
+ * based on my observations.
+ *  
+ * 64 bits of data. The packet format is:
  * 
  * [Start][ID][Address][Command][Checksum][1]
  *
@@ -57,21 +59,50 @@ static const char *const TAG = "remote.aok";
  * ID: 24 bits unsigned, unique per remote.
  * Address: 16 bits unsigned. This is a bit field so a remote can have up to 16 channels, 
  *   or you can send multiple bits as 1 to trigger multiple channels at once.
- * Command: 8 bits unsigned (UP = 11, DOWN = 67, STOP = 35, PROGRAM = 83, AFTER UP/DOWN = 36).
+ * Command: 8 bits unsigned:
+ *   UP = 11 / 0x0b
+ *   DOWN = 67 / 0x43
+ *   AFTER UP/DOWN = 36 / 0x24
+ *   DOWN LONG PRESS = 195 / 0xC3
+ *   UP LONG PRESS = 139 / 0x8B
+ *   STOP = 35 / 0x23
+ *   PROGRAM = 83 / 0x53
  * Checksum: 8 bits unsigned, 8 bit sum of ID, Address, and Command.
  * 
- * SSSSSSSS IIIIIIIIIIIIIIIIIIIIIIII AAAAAAAAAAAAAAAA CCCCCCCC KKKKKKKK E
- * 10100011 010100000101110111101001 0000000100000000 00001011 10100010 1 - UP
- * 10100011 010100000101110111101001 0000000100000000 01000011 11011010 1 - DOWN
- * 10100011 010100000101110111101001 0000000100000000 00100100 10111011 1 - AFTER UP/DOWN
- * 10100011 010100000101110111101001 0000000100000000 00100011 10111010 1 - STOP
+ * EXAMPLE:
+ * 
+ * SSSSSSSS IIIIIIIIIIIIIIIIIIIIIIII AAAAAAAAAAAAAAAA CCCCCCCC KKKKKKKK
+ * 10100011 010100000101110111101001 0000000100000000 00001011 10100010 - UP
+ * 10100011 010100000101110111101001 0000000100000000 01000011 11011010 - DOWN
+ * 10100011 010100000101110111101001 0000000100000000 00100100 10111011 - AFTER UP/DOWN
+ * 10100011 010100000101110111101001 0000000100000000 10001011 01101110 - UP LONG PRESS
+ * 10100011 010100000101110111101001 0000000100000000 11000011 01011010 - DOWN LONG PRESS
+ * 10100011 010100000101110111101001 0000000100000000 00100011 10111010 - STOP
  *
  * S = Start Code (Always the same)
  * I = Transmitter ID
  * A = Address (Bitflags)
  * C = Command 
  * K = Checksum
- * E = Extra bit (always 1)
+ * 
+ * BUTTON PRESSES
+ * 
+ * (These observations based on a AC123-02D remote)
+ * UP and DOWN buttons behave differently, based on whether it's a quick press, or a long press.
+ *
+ * For a quick press (< 1s) of an UP or DOWN button, the remote will send:
+ * t: 0ms    code: UP or DOWN x 6
+ * t: 41ms   code: AFTER_UPDOWN x 6
+ * 
+ * For a long press (>1s) of an UP or DOWN button, the remote will send:
+ * t: 0ms    code: UP or DOWN x6
+ * t: 1000ms code: repeat UP or DOWN x6
+ * t: 1500ms code: UP or DOWN LONG PRESS x6
+ * 
+ * The STOP button only sends one packet with the STOP command x6, regardless of how long 
+ * the button is pressed.
+ * 
+ 
  \*********************************************************************************************/
 
 static const uint16_t AOK_PULSE_US = 300; // 300us pulse length
@@ -82,7 +113,7 @@ static const uint16_t AOK_PULSE_US = 300; // 300us pulse length
  * L = duration of Low signal
  * stated in multiples of the AOK_PULSE_LENGTH
  */ 
-static const uint8_t AOK_PREAMBLE_LENGTH = 8; // Number of binary 1's to send to wake up the receiver.
+static const uint8_t AOK_PREAMBLE_LENGTH = 8; // Number of binary 0's to send to wake up the receiver.
 
 static const uint16_t AOK_SYNC [] = { 17 * AOK_PULSE_US, 2 * AOK_PULSE_US};
 static const uint16_t AOK_ONE [] = { 2 * AOK_PULSE_US, 1 * AOK_PULSE_US };
@@ -114,11 +145,14 @@ void AOKProtocol::eom(RemoteTransmitData *dst) const {
   dst->item(AOK_EOM[0],AOK_EOM[1]);
 }
 
+
 void AOKProtocol::encode(RemoteTransmitData *dst, const AOKData &data) {
   dst->set_carrier_frequency(0);
 
   // Send Preamble
-  this->preamble(dst);
+  if (data.preamble == true) {
+    this->preamble(dst);
+  }
 
   for (int8_t i = 0 ; i < 6 ; i++) {
     // Send SYNC
@@ -126,7 +160,7 @@ void AOKProtocol::encode(RemoteTransmitData *dst, const AOKData &data) {
 
     // Start Code
     for (int16_t i = 8 - 1; i >= 0; i--) {
-      if (data.start & (1 << i)) {
+      if (startcode & (1 << i)) {
         this->one(dst);
       } else {
         this->zero(dst);
@@ -176,95 +210,108 @@ void AOKProtocol::encode(RemoteTransmitData *dst, const AOKData &data) {
   }
 }
 
+bool AOKProtocol::expect_one(RemoteReceiveData &src) const {
+  if (!src.peek_mark(AOK_ONE[0]))
+    return false;
+  if (!src.peek_space(AOK_ONE[1], 1))
+    return false;
+  src.advance(2);
+  return true;
+}
+
+bool AOKProtocol::expect_zero(RemoteReceiveData &src) const {
+  if (!src.peek_mark(AOK_ZERO[0]))
+    return false;
+  if (!src.peek_space(AOK_ZERO[1], 1))
+    return false;
+  src.advance(2);
+  return true;
+}
+
+bool AOKProtocol::expect_sync(RemoteReceiveData &src) const { 
+  if (!src.peek_mark(AOK_SYNC[0]))
+    return false;
+  if (!src.peek_space(AOK_SYNC[1], 1))
+    return false; 
+  src.advance(2);
+  return true;
+}
+
+bool AOKProtocol::expect_eom(RemoteReceiveData &src) const {
+  if (!src.peek_mark(AOK_EOM[0]))
+    return false;
+  if (!src.peek_space(AOK_EOM[1], 1))
+    return false;
+  src.advance(2);
+  return true;
+}
+
+uint32_t AOKProtocol::decode_bits(RemoteReceiveData &src, uint8_t length) const {
+  uint32_t result = 0;
+
+  for (uint8_t i = 0 ; i < length; i++ ) {
+    result <<= 1UL;
+    if (expect_one(src)) {
+      result |= 0x01;
+    } else if (expect_zero(src)) {
+      result |= 0x00;
+    } else {
+      return -1;
+    }
+  }
+  return result;
+}
+
 optional<AOKData> AOKProtocol::decode(RemoteReceiveData src) {
   AOKData out{
-      .start = 0,
       .device = 0,
       .address = 0,
       .command = 0,
+      .preamble = true,
   };
 
+  // Scan for a Sync
+  for (uint16_t i=0 ; i < src.size() ; i++ ) {
+    if (src.peek_item(AOK_SYNC[0],AOK_SYNC[1])) {
+      break;
+    } else {
+      src.advance();
+    }
+  }
+
+  while (1) {
+ 
   // Require Sync pulse
-  if (!src.expect_pulse_with_gap(AOK_SYNC[0], AOK_SYNC[1]))
+  if (!expect_sync(src))
     return {};
   
-  ESP_LOGD(TAG, "Received AOK: sync pulse");
-  
-  // Start
-  for (uint8_t i = 0 ; i < 8; i++ ) {
-    out.start <<= 1UL;
-    if (src.expect_item(AOK_ONE[0],AOK_ONE[1])) {
-      out.start |= 0x01;
-    } else if (src.expect_item(AOK_ZERO[0], AOK_ZERO[0])) {
-      out.start |= 0x00;
-    } else {
-      // Wait, Wut?
-      return {};
-    }
-  }
-  
-  // DeviceID
-  for (uint8_t i = 0 ; i < 24; i++ ) {
-    out.device <<= 1UL;
-    if (src.expect_item(AOK_ONE[0],AOK_ONE[1])) {
-      out.device |= 0x01;
-    } else if (src.expect_item(AOK_ZERO[0], AOK_ZERO[0])) {
-      out.device |= 0x00;
-    } else {
-      // Wait, Wut?
-      return {};
-    }
-  }
+  uint8_t start = 0;
+  start = decode_bits(src, 8);
+  if (start == -1 || start != 0xA3) return {};
 
-  // Address
-  for (uint8_t i = 0 ; i < 16; i++ ) {
-    out.address <<= 1UL;
-    if (src.expect_item(AOK_ONE[0],AOK_ONE[1])) {
-      out.address |= 0x01;
-    } else if (src.expect_item(AOK_ZERO[0], AOK_ZERO[0])) {
-      out.address |= 0x00;
-    } else {
-      // Wait, Wut?
-      return {};
-    }
-  }
+  out.device = decode_bits(src, 24);
+  if (out.device == -1) return {};
 
-  // Command
-  for (uint8_t i = 0 ; i < 8; i++ ) {
-    out.command <<= 1UL;
-    if (src.expect_item(AOK_ONE[0],AOK_ONE[1])) {
-      out.command |= 0x01;
-    } else if (src.expect_item(AOK_ZERO[0], AOK_ZERO[0])) {
-      out.command |= 0x00;
-    } else {
-      // Wait, Wut?
-      return {};
-    }
-  }
+  out.address = decode_bits(src, 16);
+  if (out.address == -1) return {};
 
-  int8_t checksum = 0;
-  // Checksum
-  for (uint8_t i = 0 ; i < 8; i++ ) {
-    checksum <<= 1UL;
-    if (src.expect_item(AOK_ONE[0],AOK_ONE[1])) {
-      checksum |= 0x01;
-    } else if (src.expect_item(AOK_ZERO[0], AOK_ZERO[0])) {
-      checksum |= 0x00;
-    } else {
-      // Wait, Wut?
-      return {};
-    }
+  out.command = decode_bits(src, 8);
+  if (out.command == -1) return {};
+
+  int8_t checksum = decode_bits(src, 8);
+  if (checksum == -1) return {};
+
+  if (checksum == out.checksum()) {
+    return out;
+  } else {
+    return {}; // Checksum didn't match.  Throw it away.
   }
-  return out;
-  // if (checksum == out.checksum()) {
-  //   return out;
-  // } else {
-  //   return {}; // Checksum didn't match.  Throw it away.
-  // }
+  expect_eom(src);
+  }
 }
 
 void AOKProtocol::dump(const AOKData &data) {
-  ESP_LOGD(TAG, "Received AOK: device=0x%04X address=%d command=%d", 
+  ESP_LOGD(TAG, "Received AOK: device=0x%03X address=0x%04X command=0x%01X", 
   data.device, data.address, data.command);
 }
 

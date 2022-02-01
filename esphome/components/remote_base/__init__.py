@@ -3,7 +3,9 @@ import esphome.config_validation as cv
 from esphome import automation
 from esphome.components import binary_sensor
 from esphome.const import (
+    CONF_BINARY,
     CONF_DATA,
+    CONF_DURATION,
     CONF_TRIGGER_ID,
     CONF_NBITS,
     CONF_ADDRESS,
@@ -1263,6 +1265,7 @@ AOK_SCHEMA = cv.Schema(
         cv.Required(CONF_DEVICE): cv.hex_uint32_t,
         cv.Required(CONF_ADDRESS): cv.hex_uint16_t,
         cv.Required(CONF_COMMAND): cv.hex_uint8_t,
+        cv.Optional(CONF_BINARY, default=False): cv.boolean,
     }
 )
 
@@ -1275,6 +1278,7 @@ def aok_binary_sensor(var, config):
                 ("device", config[CONF_DEVICE]),
                 ("address", config[CONF_ADDRESS]),
                 ("command", config[CONF_COMMAND]),
+                ("preamble", config[CONF_BINARY] )
             )
         )
     )
@@ -1294,5 +1298,6 @@ def aok_action(var, config, args):
     cg.add(var.set_device((yield cg.templatable(config[CONF_DEVICE], args, cg.uint32))))
     cg.add(var.set_address((yield cg.templatable(config[CONF_ADDRESS], args, cg.uint16))))
     cg.add(var.set_command((yield cg.templatable(config[CONF_COMMAND], args, cg.uint8))))
+    cg.add(var.set_preamble((yield cg.templatable(config[CONF_BINARY], args, bool))))
 
 
